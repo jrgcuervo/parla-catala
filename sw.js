@@ -1,4 +1,4 @@
-const CACHE = 'parla-cat-v1';
+const CACHE = 'parla-cat-v2';
 const ASSETS = [
   './',
   './index.html',

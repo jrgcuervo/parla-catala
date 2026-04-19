@@ -361,14 +361,24 @@ function speak(text) {
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
 
-// Text acumulat entre reinicis (alguns navegadors, sobretot mòbils,
-// tanquen el reconeixement en silenci encara que sigui continuous).
-let accumulatedFinal = '';
+// Text finalitzat en instàncies ANTERIORS de reconeixement (acumulat
+// entre auto-reinicis). A la instància actual es recalcula sempre des
+// de zero llegint tots els results per evitar duplicacions.
+let sealedFinal = '';
+// Text final de la instància actual (es recalcula a cada onresult).
+let currentFinal = '';
 // Quan l'usuari prem aturar, posem aquesta bandera per no tornar a reiniciar.
 let userStopped = false;
 // Indica si el reconeixement està actiu (o en procés de rearrencar)
 // des del punt de vista de l'usuari.
 let sessionActive = false;
+
+function fullTranscript(interim = '') {
+  return [sealedFinal, currentFinal, interim]
+    .map(s => (s || '').trim())
+    .filter(Boolean)
+    .join(' ');
+}
 
 function initRecognition() {
   if (!SR) {
@@ -384,21 +394,26 @@ function initRecognition() {
 
   recognition.onstart = () => {
     state.recognizing = true;
+    currentFinal = '';
     micBtn.classList.add('recording');
     micLabel.textContent = 'Prémer per aturar';
-    if (!accumulatedFinal) transcriptEl.textContent = 'Escoltant…';
+    if (!sealedFinal) transcriptEl.textContent = 'Escoltant…';
   };
 
   recognition.onresult = (e) => {
-    let interim = '';
-    let newFinal = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
+    // Recalculem SEMPRE tot el text de la instància actual llegint
+    // tots els results. Així les actualitzacions de resultats existents
+    // (cosa habitual en Chrome Android amb continuous=true) no es dupliquen.
+    let finalBuf = '';
+    let interimBuf = '';
+    for (let i = 0; i < e.results.length; i++) {
       const r = e.results[i];
-      if (r.isFinal) newFinal += r[0].transcript;
-      else interim += r[0].transcript;
+      const t = r[0]?.transcript || '';
+      if (r.isFinal) finalBuf += t;
+      else interimBuf += t;
     }
-    if (newFinal) accumulatedFinal += (accumulatedFinal ? ' ' : '') + newFinal.trim();
-    transcriptEl.textContent = (accumulatedFinal + ' ' + interim).trim() || '…';
+    currentFinal = finalBuf.trim();
+    transcriptEl.textContent = fullTranscript(interimBuf) || '…';
   };
 
   recognition.onerror = (e) => {
@@ -417,6 +432,13 @@ function initRecognition() {
 
   recognition.onend = () => {
     state.recognizing = false;
+    // Abans de decidir què fer, "segellem" el text final de la instància
+    // que acaba de tancar-se perquè no es perdi ni es repeteixi.
+    if (currentFinal) {
+      sealedFinal = (sealedFinal ? sealedFinal + ' ' : '') + currentFinal;
+      currentFinal = '';
+    }
+
     // Si l'usuari no ha aturat i la sessió encara és activa,
     // rearrenquem el reconeixement per mantenir-lo obert.
     if (sessionActive && !userStopped) {
@@ -424,7 +446,6 @@ function initRecognition() {
         recognition.start();
         return;
       } catch {
-        // Si no es pot reiniciar immediatament, ho provem en un tick.
         setTimeout(() => {
           if (sessionActive && !userStopped) {
             try { recognition.start(); } catch {}
@@ -437,7 +458,7 @@ function initRecognition() {
     // Aturada real: processem el text acumulat.
     micBtn.classList.remove('recording');
     micLabel.textContent = 'Prémer per parlar';
-    const text = accumulatedFinal.trim();
+    const text = sealedFinal.trim();
     if (text) {
       transcriptEl.textContent = '';
       handleUserUtterance(text);
@@ -450,7 +471,8 @@ function initRecognition() {
 
 function startRecording() {
   if (!recognition || state.busy) return;
-  accumulatedFinal = '';
+  sealedFinal = '';
+  currentFinal = '';
   userStopped = false;
   sessionActive = true;
   try {
