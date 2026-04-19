@@ -12,7 +12,7 @@ const LS_KEYS = {
 };
 
 const DEFAULTS = {
-  model: 'gemini-2.5-flash',
+  model: 'gemini-2.5-flash-lite',
   level: 'B1',
   topic: '',
 };
@@ -376,57 +376,6 @@ function speak(text) {
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
 
-// Text finalitzat en instàncies ANTERIORS de reconeixement (acumulat
-// entre auto-reinicis). A la instància actual es recalcula sempre des
-// de zero llegint tots els results per evitar duplicacions.
-let sealedFinal = '';
-// Text final de la instància actual (es recalcula a cada onresult).
-let currentFinal = '';
-// Quan l'usuari prem aturar, posem aquesta bandera per no tornar a reiniciar.
-let userStopped = false;
-// Indica si el reconeixement està actiu (o en procés de rearrencar)
-// des del punt de vista de l'usuari.
-let sessionActive = false;
-
-function fullTranscript(interim = '') {
-  return [sealedFinal, currentFinal, interim]
-    .map(s => (s || '').trim())
-    .filter(Boolean)
-    .join(' ');
-}
-
-// Afegeix `chunk` a `base` eliminant solapaments al final de `base`
-// (cas típic quan el reconeixement es rearrenca i re-processa part de
-// l'àudio ja transcrit). Compara normalitzat (sense puntuació, minúscules).
-function normalize(s) {
-  return (s || '').toLowerCase().replace(/[.,;:!?¿¡"'`´()\[\]{}]/g, '').replace(/\s+/g, ' ').trim();
-}
-function appendWithDedup(base, chunk) {
-  const c = (chunk || '').trim();
-  if (!c) return base;
-  if (!base) return c;
-  const nBase = normalize(base);
-  const nChunk = normalize(c);
-  if (!nChunk) return base;
-  // Si el chunk ja és al final (duplicat complet), l'ignorem.
-  if (nBase.endsWith(nChunk)) return base;
-  // Cerquem el solapament més llarg: últim k chars de nBase == primers k de nChunk.
-  const maxK = Math.min(nBase.length, nChunk.length);
-  for (let k = maxK; k >= 4; k--) {
-    if (nBase.slice(-k) === nChunk.slice(0, k)) {
-      // Trobem quants caràcters del chunk original corresponen a aquests k normalitzats.
-      let consumed = 0, count = 0;
-      for (let i = 0; i < c.length && count < k; i++) {
-        const ch = c[i];
-        if (normalize(ch).length > 0) count++;
-        consumed = i + 1;
-      }
-      const rest = c.slice(consumed).trim();
-      return rest ? base + (base.endsWith(' ') ? '' : ' ') + rest : base;
-    }
-  }
-  return base + ' ' + c;
-}
 
 function initRecognition() {
   if (!SR) {
@@ -437,82 +386,43 @@ function initRecognition() {
   recognition = new SR();
   recognition.lang = 'ca-ES';
   recognition.interimResults = true;
-  recognition.continuous = true;
+  recognition.continuous = false;
   recognition.maxAlternatives = 1;
+
+  let finalText = '';
 
   recognition.onstart = () => {
     state.recognizing = true;
-    currentFinal = '';
+    finalText = '';
+    transcriptEl.textContent = 'Escoltant…';
     micBtn.classList.add('recording');
     micLabel.textContent = 'Prémer per aturar';
-    if (!sealedFinal) transcriptEl.textContent = 'Escoltant…';
   };
 
   recognition.onresult = (e) => {
-    // Recalculem SEMPRE tot el text de la instància actual llegint
-    // tots els results. Així les actualitzacions de resultats existents
-    // (cosa habitual en Chrome Android amb continuous=true) no es dupliquen.
-    let finalBuf = '';
-    let interimBuf = '';
-    for (let i = 0; i < e.results.length; i++) {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
       const r = e.results[i];
-      const t = r[0]?.transcript || '';
-      if (r.isFinal) finalBuf += t;
-      else interimBuf += t;
+      if (r.isFinal) finalText += r[0].transcript;
+      else interim += r[0].transcript;
     }
-    currentFinal = finalBuf.trim();
-    transcriptEl.textContent = fullTranscript(interimBuf) || '…';
+    transcriptEl.textContent = (finalText + ' ' + interim).trim() || '…';
   };
 
   recognition.onerror = (e) => {
-    // 'no-speech' i 'aborted' són recuperables: els ignorem perquè
-    // onend ja s'encarregarà de reiniciar si cal.
-    if (e.error === 'no-speech' || e.error === 'aborted') return;
-    // 'not-allowed' o 'service-not-allowed' són permanents.
-    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-      userStopped = true;
-      sessionActive = false;
-      transcriptEl.textContent = 'Permís de micròfon denegat.';
-      return;
-    }
     transcriptEl.textContent = 'Error: ' + e.error;
+    stopRecording();
   };
 
   recognition.onend = () => {
     state.recognizing = false;
-    // Abans de decidir què fer, "segellem" el text final de la instància
-    // que acaba de tancar-se. Usem dedup per evitar que el solapament
-    // d'àudio al rearrencar dupliqui l'última frase.
-    if (currentFinal) {
-      sealedFinal = appendWithDedup(sealedFinal, currentFinal);
-      currentFinal = '';
-    }
-
-    // Si l'usuari no ha aturat i la sessió encara és activa,
-    // rearrenquem el reconeixement per mantenir-lo obert.
-    if (sessionActive && !userStopped) {
-      try {
-        recognition.start();
-        return;
-      } catch {
-        setTimeout(() => {
-          if (sessionActive && !userStopped) {
-            try { recognition.start(); } catch {}
-          }
-        }, 150);
-        return;
-      }
-    }
-
-    // Aturada real: processem el text acumulat.
     micBtn.classList.remove('recording');
     micLabel.textContent = 'Prémer per parlar';
-    const text = sealedFinal.trim();
+    const text = finalText.trim();
     if (text) {
       transcriptEl.textContent = '';
       handleUserUtterance(text);
-    } else if (!transcriptEl.textContent.startsWith('Error') &&
-               !transcriptEl.textContent.startsWith('Permís')) {
+    } else if (!transcriptEl.textContent.startsWith('Error')) {
       transcriptEl.textContent = 'No s\'ha detectat veu.';
     }
   };
@@ -520,10 +430,6 @@ function initRecognition() {
 
 function startRecording() {
   if (!recognition || state.busy) return;
-  sealedFinal = '';
-  currentFinal = '';
-  userStopped = false;
-  sessionActive = true;
   try {
     window.speechSynthesis && window.speechSynthesis.cancel();
     recognition.start();
@@ -534,8 +440,6 @@ function startRecording() {
 
 function stopRecording() {
   if (!recognition) return;
-  userStopped = true;
-  sessionActive = false;
   try { recognition.stop(); } catch {}
 }
 
