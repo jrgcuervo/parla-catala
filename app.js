@@ -263,7 +263,10 @@ ${profileSummary()}`;
       responseMimeType: 'application/json',
       responseSchema: RESPONSE_SCHEMA,
       temperature: 0.7,
-      maxOutputTokens: 1024,
+      maxOutputTokens: 2048,
+      // Desactivem el "thinking" de Gemini 2.5: consumeix pressupost de
+      // tokens i pot deixar l'output visible buit o truncat.
+      thinkingConfig: { thinkingBudget: 0 },
     },
   };
 
@@ -281,14 +284,18 @@ ${profileSummary()}`;
   }
 
   const data = await res.json();
-  const text = (data.candidates?.[0]?.content?.parts || [])
+  const candidate = data.candidates?.[0];
+  const text = (candidate?.content?.parts || [])
     .map(p => p.text || '')
     .join('')
     .trim();
 
   if (!text) {
     const blockReason = data.promptFeedback?.blockReason;
-    throw new Error(blockReason ? `Resposta bloquejada: ${blockReason}` : 'Resposta buida del model.');
+    const finishReason = candidate?.finishReason;
+    if (blockReason) throw new Error(`Resposta bloquejada: ${blockReason}`);
+    if (finishReason === 'MAX_TOKENS') throw new Error('Resposta tallada (MAX_TOKENS). Prova un model més potent o parla més curt.');
+    throw new Error('Resposta buida del model' + (finishReason ? ` (finishReason: ${finishReason})` : '') + '.');
   }
 
   let parsed;
@@ -296,8 +303,16 @@ ${profileSummary()}`;
     parsed = JSON.parse(text);
   } catch {
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No s\'ha pogut interpretar la resposta: ' + text.slice(0, 200));
-    parsed = JSON.parse(jsonMatch[0]);
+    if (!jsonMatch) {
+      console.error('Gemini raw response:', text);
+      throw new Error('No s\'ha pogut interpretar la resposta. Fragment: ' + text.slice(0, 300));
+    }
+    try {
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch (e) {
+      console.error('Gemini raw response:', text);
+      throw new Error('JSON invàlid: ' + text.slice(0, 300));
+    }
   }
 
   return { parsed, rawAssistantText: text };
@@ -380,6 +395,39 @@ function fullTranscript(interim = '') {
     .join(' ');
 }
 
+// Afegeix `chunk` a `base` eliminant solapaments al final de `base`
+// (cas típic quan el reconeixement es rearrenca i re-processa part de
+// l'àudio ja transcrit). Compara normalitzat (sense puntuació, minúscules).
+function normalize(s) {
+  return (s || '').toLowerCase().replace(/[.,;:!?¿¡"'`´()\[\]{}]/g, '').replace(/\s+/g, ' ').trim();
+}
+function appendWithDedup(base, chunk) {
+  const c = (chunk || '').trim();
+  if (!c) return base;
+  if (!base) return c;
+  const nBase = normalize(base);
+  const nChunk = normalize(c);
+  if (!nChunk) return base;
+  // Si el chunk ja és al final (duplicat complet), l'ignorem.
+  if (nBase.endsWith(nChunk)) return base;
+  // Cerquem el solapament més llarg: últim k chars de nBase == primers k de nChunk.
+  const maxK = Math.min(nBase.length, nChunk.length);
+  for (let k = maxK; k >= 4; k--) {
+    if (nBase.slice(-k) === nChunk.slice(0, k)) {
+      // Trobem quants caràcters del chunk original corresponen a aquests k normalitzats.
+      let consumed = 0, count = 0;
+      for (let i = 0; i < c.length && count < k; i++) {
+        const ch = c[i];
+        if (normalize(ch).length > 0) count++;
+        consumed = i + 1;
+      }
+      const rest = c.slice(consumed).trim();
+      return rest ? base + (base.endsWith(' ') ? '' : ' ') + rest : base;
+    }
+  }
+  return base + ' ' + c;
+}
+
 function initRecognition() {
   if (!SR) {
     micBtn.disabled = true;
@@ -433,9 +481,10 @@ function initRecognition() {
   recognition.onend = () => {
     state.recognizing = false;
     // Abans de decidir què fer, "segellem" el text final de la instància
-    // que acaba de tancar-se perquè no es perdi ni es repeteixi.
+    // que acaba de tancar-se. Usem dedup per evitar que el solapament
+    // d'àudio al rearrencar dupliqui l'última frase.
     if (currentFinal) {
-      sealedFinal = (sealedFinal ? sealedFinal + ' ' : '') + currentFinal;
+      sealedFinal = appendWithDedup(sealedFinal, currentFinal);
       currentFinal = '';
     }
 
