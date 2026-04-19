@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#b8336a"/>
+  <g fill="#ffffff">
+    <path d="M256 96c-44 0-80 36-80 80v96c0 44 36 80 80 80s80-36 80-80v-96c0-44-36-80-80-80z"/>
+    <path d="M144 256v16c0 62 50 112 112 112s112-50 112-112v-16h-32v16c0 44-36 80-80 80s-80-36-80-80v-16h-32z"/>
+    <rect x="240" y="384" width="32" height="40"/>
+    <rect x="200" y="424" width="112" height="24" rx="12"/>
+  </g>
+  <text x="256" y="476" text-anchor="middle" font-family="Arial,sans-serif" font-size="42" font-weight="700" fill="#ffffff">CAT</text>
+</svg>

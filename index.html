@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#b8336a" />
+<title>Parla Català</title>
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="icon.svg" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<header>
+  <h1>Parla Català</h1>
+  <button id="settingsBtn" class="icon-btn" aria-label="Configuració">⚙️</button>
+</header>
+
+<main>
+  <section id="chat" class="chat" aria-live="polite"></section>
+
+  <section class="controls">
+    <button id="micBtn" class="mic-btn" aria-label="Prémer per parlar">
+      <span class="mic-icon">🎤</span>
+      <span id="micLabel">Prémer per parlar</span>
+    </button>
+    <div id="transcript" class="transcript" aria-live="polite"></div>
+    <div class="row">
+      <button id="nextBtn" class="secondary">Següent pregunta</button>
+      <button id="repeatBtn" class="secondary">Repetir pregunta</button>
+    </div>
+  </section>
+</main>
+
+<dialog id="settingsDialog">
+  <form method="dialog" id="settingsForm">
+    <h2>Configuració</h2>
+    <label>
+      Clau API d'Anthropic
+      <input type="password" id="apiKey" placeholder="sk-ant-..." autocomplete="off" />
+    </label>
+    <label>
+      Model
+      <select id="model">
+        <option value="claude-haiku-4-5-20251001">Haiku 4.5 (ràpid)</option>
+        <option value="claude-sonnet-4-6">Sonnet 4.6 (equilibrat)</option>
+        <option value="claude-opus-4-7">Opus 4.7 (millor)</option>
+      </select>
+    </label>
+    <label>
+      Nivell
+      <select id="level">
+        <option value="A1">A1 — Principiant</option>
+        <option value="A2">A2 — Bàsic</option>
+        <option value="B1" selected>B1 — Intermedi</option>
+        <option value="B2">B2 — Intermedi alt</option>
+        <option value="C1">C1 — Avançat</option>
+        <option value="C2">C2 — Superior</option>
+      </select>
+    </label>
+    <label>
+      Tema o context (opcional)
+      <input type="text" id="topic" placeholder="ex: viatges, feina, família..." />
+    </label>
+    <h3>Perfil d'errors</h3>
+    <pre id="profilePreview" class="profile-preview"></pre>
+    <div class="dialog-actions">
+      <button type="button" id="resetProfile" class="danger">Esborrar perfil</button>
+      <button type="submit" class="primary">Desar</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="app.js" type="module"></script>
+</body>
+</html>

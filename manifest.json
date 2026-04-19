@@ -1,0 +1,15 @@
+{
+  "name": "Parla Català",
+  "short_name": "Parla CAT",
+  "description": "Practica el català parlat amb correccions personalitzades.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#faf6f2",
+  "theme_color": "#b8336a",
+  "lang": "ca",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
