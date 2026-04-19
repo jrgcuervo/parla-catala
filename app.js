@@ -12,7 +12,7 @@ const LS_KEYS = {
 };
 
 const DEFAULTS = {
-  model: 'claude-haiku-4-5-20251001',
+  model: 'gemini-2.5-flash',
   level: 'B1',
   topic: '',
 };
@@ -175,7 +175,7 @@ function profileSummary() {
     .join('\n');
 }
 
-// ---------- Anthropic API ----------
+// ---------- Gemini API ----------
 const SYSTEM_PROMPT = `Ets un professor de català molt pacient i natural. L'usuari està practicant català parlat. La seva resposta t'arriba transcrita per reconeixement de veu, per tant pot tenir petites imprecisions de transcripció (homòfons, accents). Si sembla un error de transcripció, no ho corregeixis; només corregeix errors lingüístics reals.
 
 Funcionament:
@@ -184,7 +184,7 @@ Funcionament:
 3. Llança una pregunta nova, engrescadora, adaptada al nivell i al tema, i que convidi a respondre amb frases completes. Varia el tipus de pregunta (opinió, narració, descripció, hipòtesi).
 4. Si veus errors recurrents al perfil, de tant en tant introdueix preguntes que facin servir aquestes estructures per practicar-les.
 
-Respon SEMPRE amb un JSON vàlid i NOMÉS el JSON, sense cap text addicional, amb aquesta forma exacta:
+Has de respondre sempre amb un JSON que segueixi aquest esquema:
 {
   "feedback": {
     "corrections": [
@@ -197,7 +197,45 @@ Respon SEMPRE amb un JSON vàlid i NOMÉS el JSON, sense cap text addicional, am
 
 Si la resposta de l'usuari és perfecta, deixa "corrections" com a array buit. Mantén "note" curt (màxim una frase). La "next_question" ha de ser en català clar i adequat al nivell.`;
 
-async function callClaude(userUtterance) {
+// Esquema JSON per forçar l'estructura de sortida de Gemini.
+const RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    feedback: {
+      type: 'object',
+      properties: {
+        corrections: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              wrong: { type: 'string' },
+              right: { type: 'string' },
+              category: { type: 'string' },
+              note: { type: 'string' },
+            },
+            required: ['right', 'category'],
+          },
+        },
+        tip: { type: 'string' },
+      },
+      required: ['corrections', 'tip'],
+    },
+    next_question: { type: 'string' },
+  },
+  required: ['feedback', 'next_question'],
+};
+
+// Converteix l'historial intern (role: user|assistant, content: string)
+// al format de Gemini (role: user|model, parts: [{text}]).
+function toGeminiContents(history) {
+  return history.map(m => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }));
+}
+
+async function callGemini(userUtterance) {
   if (!state.apiKey) {
     throw new Error('Falta la clau API. Obre la configuració (⚙️) i afegeix-la.');
   }
@@ -213,28 +251,27 @@ Torns totals acumulats: ${state.profile.totalTurns}
 Perfil d'errors recurrents de l'usuari (per prioritzar):
 ${profileSummary()}`;
 
-  const messages = [
-    ...state.history.slice(-MAX_HISTORY_TURNS * 2),
-    { role: 'user', content: `${contextBlock}\n\n${userBlock}` },
+  const contents = [
+    ...toGeminiContents(state.history.slice(-MAX_HISTORY_TURNS * 2)),
+    { role: 'user', parts: [{ text: `${contextBlock}\n\n${userBlock}` }] },
   ];
 
   const body = {
-    model: state.model,
-    max_tokens: 800,
-    system: [
-      { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }
-    ],
-    messages,
+    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+    contents,
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseSchema: RESPONSE_SCHEMA,
+      temperature: 0.7,
+      maxOutputTokens: 1024,
+    },
   };
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(state.model)}:generateContent?key=${encodeURIComponent(state.apiKey)}`;
+
+  const res = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': state.apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
 
@@ -244,14 +281,23 @@ ${profileSummary()}`;
   }
 
   const data = await res.json();
-  const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+  const text = (data.candidates?.[0]?.content?.parts || [])
+    .map(p => p.text || '')
+    .join('')
+    .trim();
+
+  if (!text) {
+    const blockReason = data.promptFeedback?.blockReason;
+    throw new Error(blockReason ? `Resposta bloquejada: ${blockReason}` : 'Resposta buida del model.');
+  }
 
   let parsed;
   try {
+    parsed = JSON.parse(text);
+  } catch {
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    parsed = JSON.parse(jsonMatch ? jsonMatch[0] : text);
-  } catch (e) {
-    throw new Error('No s\'ha pogut interpretar la resposta: ' + text.slice(0, 200));
+    if (!jsonMatch) throw new Error('No s\'ha pogut interpretar la resposta: ' + text.slice(0, 200));
+    parsed = JSON.parse(jsonMatch[0]);
   }
 
   return { parsed, rawAssistantText: text };
@@ -269,7 +315,7 @@ async function handleUserUtterance(utterance) {
   const thinkingEl = addThinking();
 
   try {
-    const { parsed } = await callClaude(utterance);
+    const { parsed } = await callGemini(utterance);
     thinkingEl.remove();
 
     const fb = parsed.feedback || { corrections: [], tip: '' };
@@ -463,7 +509,7 @@ async function bootstrap() {
   state.busy = true;
   const thinkingEl = addThinking();
   try {
-    const { parsed } = await callClaude('(inici de sessió, dona la benvinguda i la primera pregunta)');
+    const { parsed } = await callGemini('(inici de sessió, dona la benvinguda i la primera pregunta)');
     thinkingEl.remove();
     const nextQ = parsed.next_question || 'Com estàs avui?';
     addMessage('assistant', nextQ, { label: 'Professora' });
